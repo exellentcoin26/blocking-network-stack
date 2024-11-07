@@ -29,7 +29,7 @@ const LOCAL_PORT_MAX: u16 = 65535;
 /// Non-async TCP/IP network stack
 ///
 /// Mostly a convenience wrapper for `smoltcp`
-pub struct WifiStack<'a, D: smoltcp::phy::Device> {
+pub struct Stack<'a, D: smoltcp::phy::Device> {
     device: RefCell<D>,
     network_interface: RefCell<Interface>,
     sockets: RefCell<SocketSet<'a>>,
@@ -46,7 +46,7 @@ pub struct WifiStack<'a, D: smoltcp::phy::Device> {
     dns_socket_handle: RefCell<Option<SocketHandle>>,
 }
 
-impl<'a, D: smoltcp::phy::Device> WifiStack<'a, D> {
+impl<'a, D: smoltcp::phy::Device> Stack<'a, D> {
     /// Creates new `WifiStack` instance.
     ///
     /// Handles optional DHCP/DNS features and sets up the
@@ -57,7 +57,7 @@ impl<'a, D: smoltcp::phy::Device> WifiStack<'a, D> {
         #[allow(unused_mut)] mut sockets: SocketSet<'a>,
         current_millis_fn: fn() -> u64,
         random: u32,
-    ) -> WifiStack<'a, D> {
+    ) -> Stack<'a, D> {
         #[cfg(feature = "dhcpv4")]
         let mut dhcp_socket_handle: Option<SocketHandle> = None;
         #[cfg(feature = "dns")]
@@ -521,7 +521,7 @@ impl Display for WifiStackError {
     }
 }
 
-impl<D: smoltcp::phy::Device> WifiStack<'_, D> {
+impl<D: smoltcp::phy::Device> Stack<'_, D> {
     /// Retrieves the current interface configuration.
     pub fn get_iface_configuration(&self) -> Result<ipv4::Configuration, WifiStackError> {
         Ok(self.network_config.borrow().clone())
@@ -551,7 +551,7 @@ impl<D: smoltcp::phy::Device> WifiStack<'_, D> {
 #[cfg(feature = "tcp")]
 pub struct Socket<'s, 'n: 's, D: smoltcp::phy::Device> {
     socket_handle: SocketHandle,
-    network: &'s WifiStack<'n, D>,
+    network: &'s Stack<'n, D>,
 }
 
 #[cfg(feature = "tcp")]
@@ -854,7 +854,7 @@ impl<'s, 'n: 's, D: smoltcp::phy::Device> embedded_io::WriteReady for Socket<'s,
 #[cfg(feature = "udp")]
 pub struct UdpSocket<'s, 'n: 's, D: smoltcp::phy::Device> {
     socket_handle: SocketHandle,
-    network: &'s WifiStack<'n, D>,
+    network: &'s Stack<'n, D>,
 }
 
 #[cfg(feature = "udp")]
