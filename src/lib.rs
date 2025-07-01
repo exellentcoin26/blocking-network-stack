@@ -5,7 +5,7 @@
 // MUST be the first module
 mod fmt;
 
-use core::{borrow::BorrowMut, cell::RefCell, fmt::Display};
+use core::{borrow::BorrowMut, cell::RefCell, fmt::Display, marker::PhantomData};
 
 #[cfg(feature = "dhcpv4")]
 use smoltcp::socket::dhcpv4::Socket as Dhcpv4Socket;
@@ -281,37 +281,37 @@ impl<'a, D: smoltcp::phy::Device> Stack<'a, D> {
 
     /// Create a new [Socket]
     #[cfg(feature = "tcp")]
-    pub fn get_socket<'s>(
+    pub fn get_socket<'s, 'b>(
         &'s self,
-        rx_buffer: &'a mut [u8],
-        tx_buffer: &'a mut [u8],
-    ) -> Socket<'s, 'a, D>
-    where
-        'a: 's,
-    {
+        rx_buffer: &'b mut [u8],
+        tx_buffer: &'b mut [u8],
+    ) -> Socket<'s, 'a, 'b, D> {
         let socket = TcpSocket::new(
             smoltcp::socket::tcp::SocketBuffer::new(rx_buffer),
             smoltcp::socket::tcp::SocketBuffer::new(tx_buffer),
         );
 
+        // SAFETY: The lifetime of the internal socket buffer is managed using the `PhantomData`
+        // buffer lifetime.
+        let socket = unsafe { core::mem::transmute::<TcpSocket<'b>, TcpSocket<'a>>(socket) };
         let socket_handle =
             self.with_mut(|_interface, _device, sockets| sockets.borrow_mut().add(socket));
-
         Socket {
             socket_handle,
             network: self,
+            _buffer: PhantomData,
         }
     }
 
     /// Create a new [UdpSocket]
     #[cfg(feature = "udp")]
-    pub fn get_udp_socket<'s>(
+    pub fn get_udp_socket<'s, 'b>(
         &'s self,
-        rx_meta: &'a mut [smoltcp::socket::udp::PacketMetadata],
-        rx_buffer: &'a mut [u8],
-        tx_meta: &'a mut [smoltcp::socket::udp::PacketMetadata],
-        tx_buffer: &'a mut [u8],
-    ) -> UdpSocket<'s, 'a, D>
+        rx_meta: &'b mut [smoltcp::socket::udp::PacketMetadata],
+        rx_buffer: &'b mut [u8],
+        tx_meta: &'b mut [smoltcp::socket::udp::PacketMetadata],
+        tx_buffer: &'b mut [u8],
+    ) -> UdpSocket<'s, 'a, 'b, D>
     where
         'a: 's,
     {
@@ -320,12 +320,20 @@ impl<'a, D: smoltcp::phy::Device> Stack<'a, D> {
             smoltcp::socket::udp::PacketBuffer::new(tx_meta, tx_buffer),
         );
 
-        let socket_handle =
-            self.with_mut(|_interface, _device, sockets| sockets.borrow_mut().add(socket));
+        let socket_handle = {
+            use smoltcp::socket::udp::Socket as UdpSocket;
+
+            // SAFETY: The lifetime of the internal socket buffer is managed using the `PhantomData`
+            // buffer lifetime.
+            let socket = unsafe { core::mem::transmute::<UdpSocket<'b>, UdpSocket<'a>>(socket) };
+
+            self.with_mut(|_interface, _device, sockets| sockets.borrow_mut().add(socket))
+        };
 
         UdpSocket {
             socket_handle,
             network: self,
+            _buffer: PhantomData,
         }
     }
 
@@ -549,13 +557,14 @@ impl<D: smoltcp::phy::Device> Stack<'_, D> {
 
 /// A TCP socket
 #[cfg(feature = "tcp")]
-pub struct Socket<'s, 'n: 's, D: smoltcp::phy::Device> {
+pub struct Socket<'s, 'a: 's, 'b: 's, D: smoltcp::phy::Device> {
     socket_handle: SocketHandle,
-    network: &'s Stack<'n, D>,
+    network: &'s Stack<'a, D>,
+    _buffer: PhantomData<&'b ()>,
 }
 
 #[cfg(feature = "tcp")]
-impl<'s, 'n: 's, D: smoltcp::phy::Device> Socket<'s, 'n, D> {
+impl<'s, 'a: 's, 'b: 's, D: smoltcp::phy::Device> Socket<'s, 'a, 'b, D> {
     /// Connect the socket
     pub fn open<'i>(&'i mut self, addr: IpAddress, port: u16) -> Result<(), IoError>
     where
@@ -678,7 +687,7 @@ impl<'s, 'n: 's, D: smoltcp::phy::Device> Socket<'s, 'n, D> {
 }
 
 #[cfg(feature = "tcp")]
-impl<'s, 'n: 's, D: smoltcp::phy::Device> Drop for Socket<'s, 'n, D> {
+impl<'s, 'a: 's, 'b: 's, D: smoltcp::phy::Device> Drop for Socket<'s, 'a, 'b, D> {
     fn drop(&mut self) {
         self.network
             .with_mut(|_interface, _device, sockets| sockets.remove(self.socket_handle));
@@ -715,12 +724,12 @@ impl embedded_io::Error for IoError {
 }
 
 #[cfg(feature = "tcp")]
-impl<'s, 'n: 's, D: smoltcp::phy::Device> embedded_io::ErrorType for Socket<'s, 'n, D> {
+impl<'s, 'a: 's, 'b: 's, D: smoltcp::phy::Device> embedded_io::ErrorType for Socket<'s, 'a, 'b, D> {
     type Error = IoError;
 }
 
 #[cfg(feature = "tcp")]
-impl<'s, 'n: 's, D: smoltcp::phy::Device> embedded_io::Read for Socket<'s, 'n, D> {
+impl<'s, 'a: 's, 'b: 's, D: smoltcp::phy::Device> embedded_io::Read for Socket<'s, 'a, 'b, D> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         let current_millis = self.network.current_millis_fn;
 
@@ -743,7 +752,7 @@ impl<'s, 'n: 's, D: smoltcp::phy::Device> embedded_io::Read for Socket<'s, 'n, D
 }
 
 #[cfg(feature = "tcp")]
-impl<'s, 'n: 's, D: smoltcp::phy::Device> embedded_io::ReadReady for Socket<'s, 'n, D> {
+impl<'s, 'a: 's, 'b: 's, D: smoltcp::phy::Device> embedded_io::ReadReady for Socket<'s, 'a, 'b, D> {
     fn read_ready(&mut self) -> Result<bool, Self::Error> {
         let current_millis = self.network.current_millis_fn;
 
@@ -763,7 +772,7 @@ impl<'s, 'n: 's, D: smoltcp::phy::Device> embedded_io::ReadReady for Socket<'s, 
 }
 
 #[cfg(feature = "tcp")]
-impl<'s, 'n: 's, D: smoltcp::phy::Device> embedded_io::Write for Socket<'s, 'n, D> {
+impl<'s, 'a: 's, 'b: 's, D: smoltcp::phy::Device> embedded_io::Write for Socket<'s, 'a, 'b, D> {
     fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         loop {
             let (may_send, is_open, can_send) =
@@ -828,7 +837,9 @@ impl<'s, 'n: 's, D: smoltcp::phy::Device> embedded_io::Write for Socket<'s, 'n, 
 }
 
 #[cfg(feature = "tcp")]
-impl<'s, 'n: 's, D: smoltcp::phy::Device> embedded_io::WriteReady for Socket<'s, 'n, D> {
+impl<'s, 'a: 's, 'b: 's, D: smoltcp::phy::Device> embedded_io::WriteReady
+    for Socket<'s, 'a, 'b, D>
+{
     fn write_ready(&mut self) -> Result<bool, Self::Error> {
         let (may_send, is_open, can_send) = self.network.with_mut(|interface, device, sockets| {
             interface.poll(
@@ -852,13 +863,14 @@ impl<'s, 'n: 's, D: smoltcp::phy::Device> embedded_io::WriteReady for Socket<'s,
 
 /// A UDP socket
 #[cfg(feature = "udp")]
-pub struct UdpSocket<'s, 'n: 's, D: smoltcp::phy::Device> {
+pub struct UdpSocket<'s, 'a: 's, 'b: 's, D: smoltcp::phy::Device> {
     socket_handle: SocketHandle,
-    network: &'s Stack<'n, D>,
+    network: &'s Stack<'a, D>,
+    _buffer: PhantomData<&'b ()>,
 }
 
 #[cfg(feature = "udp")]
-impl<'s, 'n: 's, D: smoltcp::phy::Device> UdpSocket<'s, 'n, D> {
+impl<'s, 'a: 's, 'b: 's, D: smoltcp::phy::Device> UdpSocket<'s, 'a, 'b, D> {
     /// Binds the socket to the given port
     pub fn bind<'i>(&'i mut self, port: u16) -> Result<(), IoError>
     where
@@ -984,7 +996,7 @@ impl<'s, 'n: 's, D: smoltcp::phy::Device> UdpSocket<'s, 'n, D> {
 }
 
 #[cfg(feature = "udp")]
-impl<'s, 'n: 's, D: smoltcp::phy::Device> Drop for UdpSocket<'s, 'n, D> {
+impl<'s, 'a: 's, 'b: 's, D: smoltcp::phy::Device> Drop for UdpSocket<'s, 'a, 'b, D> {
     fn drop(&mut self) {
         self.network
             .with_mut(|_, _, sockets| sockets.borrow_mut().remove(self.socket_handle));
