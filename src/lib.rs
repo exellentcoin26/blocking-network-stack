@@ -257,6 +257,9 @@ impl<'a, D: smoltcp::phy::Device> Stack<'a, D> {
 
                         let address = config.address;
                         interface.borrow_mut().update_ip_addrs(|addrs| {
+                            if addrs.contains(&smoltcp::wire::IpCidr::Ipv4(address)) {
+                                return;
+                            }
                             unwrap!(addrs.push(smoltcp::wire::IpCidr::Ipv4(address)));
                         });
                         if let Some(route) = config.router {
